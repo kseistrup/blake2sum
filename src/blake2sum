@@ -1,0 +1,192 @@
+#!/usr/bin/python3
+# -*- mode: python; coding: utf-8 -*-
+"""
+Usage: blake2sum [OPTIONS] [FILE [FILE …]]
+
+positional arguments:
+  FILE                  file to calculate digest for
+
+optional arguments:
+  -h, --help            show this help message and exit
+  -v, --version         show version information and exit
+  -c, --copyright       show copying policy and exit
+  -a ALGO, --algo ALGO  hash algorithm (blake2b is default): [blake2b|blake2s]
+  -l LENGTH, --length LENGTH
+                        digest length in bits
+  -t, --tag             create a BSD-style checksum
+
+With no FILE, or when FILE is -, read standard input.
+
+blake2b is optimized for 64-bit platforms and NEON-enabled ARMs,
+        produces digests of any size between 1 and 64 bytes.
+
+blake2s is optimized for 8 to 32-bit platforms, produces digests
+        of any size between 1 and 32 bytes.
+
+Digest length must not exceed the maximum for the selected algorithm
+and must be a multiple of 8.
+"""
+##############################################################################
+# This program is free software; you can redistribute it and/or modify it    #
+# under the terms of the GNU General Public License as published by the Free #
+# Software Foundation; either version 3 of the License, or (at your option)  #
+# any later version.                                                         #
+#                                                                            #
+# This program is distributed in the hope that it will be useful, but with-  #
+# out any warranty; without even the implied warranty of merchantability or  #
+# fitness for a particular purpose. See the GNU General Public License for   #
+# more details.  <http://gplv3.fsf.org/>                                     #
+##############################################################################
+
+import sys
+import os
+import pathlib
+import argparse
+import hashlib
+import pprint
+
+try:
+    from locale import (Error, setlocale, LC_ALL)
+    _ = setlocale(LC_ALL, '')
+except (ImportError, ModuleNotFoundError, NameError, Error):
+    pass
+
+__author__ = 'Klaus Alexander Seistrup <klaus@seistrup.dk>'
+__revision__ = '2017-03-02'
+__version__ = '0.0.1 ({})'.format(__revision__)
+__copyright__ = """\
+blake2sum {}
+Copyright © 2017 Klaus Alexander Seistrup <klaus@seistrup.dk>
+
+This is free software; see the source for copying conditions. There is no
+warranty; not even for merchantability or fitness for a particular purpose.\
+""".format(__version__)
+
+DEBUG = os.environ.get('DEBUG', 'False')[0].upper() in '1JTY'  # 1/Ja/True/Yes
+
+EPILOG = """With no FILE, or when FILE is -, read standard input.
+
+blake2b is optimized for 64-bit platforms and NEON-enabled ARMs,
+        produces digests of any size between 1 and 64 bytes.
+
+blake2s is optimized for 8 to 32-bit platforms, produces digests
+        of any size between 1 and 32 bytes.
+
+Digest length must not exceed the maximum for the selected algorithm
+and must be a multiple of 8."""
+
+
+def die(message=None):
+    """Exit gracefully"""
+    if message:
+        print(message, file=sys.stderr)
+    sys.exit(1 if message else 0)
+
+
+def debug(head, data):
+    """Possibly pretty print an object to stderr"""
+    if DEBUG:
+        pprint.pprint({head: data}, stream=sys.stderr)
+
+
+def get_algo(algo, bits):
+    """Check that ALGO exists and that BITS is valid"""
+    if algo not in hashlib.algorithms_available:
+        die('unsupported hash algorithm: {}'.format(algo))
+    if bits % 8:
+        die('digest length must be a multiple of 8')
+    size = bits // 8
+
+    try:
+        if size:
+            module = hashlib.new(algo, digest_size=size)
+        else:
+            module = hashlib.new(algo)
+    except ValueError as error:
+        die(str(error).replace('_', ' '))
+
+    return module
+
+
+def get_blakes():
+    """Return a list of supported BLAKE2 algorithms"""
+    algos = tuple(
+        algo for algo in hashlib.algorithms_guaranteed
+        if algo.startswith('blake2')
+    )
+    if not algos:
+        die('your hashlib does not support any BLAKE2 algorithms')
+
+    return '|'.join(sorted(algos))
+
+
+def blake2sum(algo, files, tag):
+    """Calculate and show BLAKE2 digests for all files"""
+    cache = {}
+    algo_name = algo.name.replace('blake', 'BLAKE')
+    formatter = '{algo} ({name}) = {digest}' if tag else '{digest}  {name}'
+
+    for fname in files:
+        fpath = pathlib.Path('/dev/stdin' if fname == '-' else fname)
+        ppath = fpath.resolve().as_posix()
+        if ppath in cache:
+            digest = cache[ppath]
+        else:
+            try:
+                with open(fpath, 'rb') as fptr:
+                    fbuf = fptr.read()
+            except (PermissionError, FileNotFoundError) as error:
+                die(error)
+            except (IOError, OSError) as error:
+                die(error)
+            blake2 = algo.copy()
+            blake2.update(fbuf)
+            digest = blake2.hexdigest()
+            cache[ppath] = digest
+        print(formatter.format(algo=algo_name, name=fname, digest=digest))
+
+    return 0
+
+
+def main(progname='blake2sum'):
+    """Main entry point"""
+
+    debug('argv', sys.argv)
+    blakes = 'hash algorithm (blake2b is default): [{}]'.format(get_blakes())
+
+    parser = argparse.ArgumentParser(
+        prog=progname,
+        formatter_class=argparse.RawTextHelpFormatter,
+        epilog=EPILOG
+    )
+    # Generic options
+    parser.add_argument('-v', '--version', action='version',
+                        version='%(prog)s/{}'.format(__version__),
+                        help='show version information and exit')
+    parser.add_argument('-c', '--copyright', action='version',
+                        version=__copyright__,
+                        help='show copying policy and exit')
+    # Specific options
+    parser.add_argument('-a', '--algo', default='blake2b',
+                        help=blakes)
+    parser.add_argument('-l', '--length', type=int, default=0,
+                        help='digest length in bits')
+    parser.add_argument('-t', '--tag', action='store_true',
+                        help='create a BSD-style checksum')
+    # The rest
+    parser.add_argument('FILE', nargs='*', default=['-'],
+                        help='file to calculate digest for')
+
+    args = parser.parse_args()
+    debug('args', args)
+
+    algo = get_algo(args.algo, args.length)
+    fail = blake2sum(algo, args.FILE, args.tag)
+
+    return fail
+
+
+if __name__ == '__main__':
+    sys.exit(main(pathlib.Path(sys.argv[0]).name))
+
+# eof
